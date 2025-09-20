@@ -8,7 +8,7 @@ import path from 'path';
 import { selectors } from './utils/selectors.js';
 import { transformAndSanitizeHtml } from './utils/sanitizer.js';
 
-// A simple logging utility for initial console output before the file logger is ready.
+// --------------------- Logging ---------------------
 const consoleLog = {
   action: (msg) => console.log(`[*] ${msg}`),
   info: (msg) => console.log(`[i] ${msg}`),
@@ -17,42 +17,31 @@ const consoleLog = {
   error: (msg) => console.error(`[x] ${msg}`),
 };
 
-/**
- * Creates a comprehensive logger that writes to both the console and a specified log file.
- * @param {string} logFilePath - The full path to the log file.
- * @returns {object} A logger object with methods for different log levels.
- */
 function createLogger(logFilePath) {
   const logDir = path.dirname(logFilePath);
   fs.mkdirSync(logDir, { recursive: true });
   const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
-  const formatFileMessage = (level, msg) => {
-    const timestamp = new Date().toISOString();
-    return `[${timestamp}] [${level.toUpperCase()}] ${msg}\n`;
-  };
-  const logger = {
+  const formatFileMessage = (level, msg) => `[${new Date().toISOString()}] [${level.toUpperCase()}] ${msg}\n`;
+
+  return {
     action: (msg) => { console.log(`[*] ${msg}`); logStream.write(formatFileMessage('action', msg)); },
     info: (msg) => { console.log(`[i] ${msg}`); logStream.write(formatFileMessage('info', msg)); },
     success: (msg) => { console.log(`[✓] ${msg}`); logStream.write(formatFileMessage('success', msg)); },
     warn: (msg) => { console.log(`[?] ${msg}`); logStream.write(formatFileMessage('warn', msg)); },
-    error: (msg) => {
-      const message = (msg instanceof Error) ? (msg.stack || msg.toString()) : msg;
-      console.error(`[x] ${message}`);
+    error: (msg) => { 
+      const message = msg instanceof Error ? (msg.stack || msg.toString()) : msg;
+      console.error(`[x] ${message}`); 
       logStream.write(formatFileMessage('error', message));
     },
     close: () => { logStream.end(); }
   };
-  return logger;
 }
 
-/**
- * Creates a promise that resolves after a specified delay.
- * @param {number} ms - The delay in milliseconds.
- * @returns {Promise<void>}
- */
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
+// --------------------- Delays & Randomization ---------------------
+const delay = ms => new Promise(res => setTimeout(res, ms));
+const randomDelay = (min, max) => delay(Math.floor(Math.random() * (max - min + 1) + min));
 
-// Custom Error class for timeouts
+// --------------------- Timeout Error ---------------------
 class TimeoutError extends Error {
   constructor(message) {
     super(message);
@@ -60,340 +49,275 @@ class TimeoutError extends Error {
   }
 }
 
-/**
- * Waits for a specific element to appear in the DOM.
- * Polls the page until the selector is found or the timeout is reached.
- * @param {object} Runtime - The CDP Runtime protocol client.
- * @param {string} selector - The CSS selector to wait for.
- * @param {number} timeout - Maximum time to wait in milliseconds.
- * @returns {Promise<void>} Resolves when the element is found, rejects on timeout.
- */
+// --------------------- Wait for Selector ---------------------
 async function waitForSelector(Runtime, selector, timeout) {
   const startTime = Date.now();
   while (Date.now() - startTime < timeout) {
-    const { result } = await Runtime.evaluate({
-      expression: `document.querySelector('${selector}') !== null`,
-    });
-    if (result.value) {
-      return; // Selector found, success!
-    }
-    await delay(250); // Wait a bit before checking again
+    const { result } = await Runtime.evaluate({ expression: `document.querySelector('${selector}') !== null` });
+    if (result.value) return;
+    await delay(250);
   }
-  throw new TimeoutError(`Timeout: Waited ${timeout}ms for selector "${selector}" to appear.`);
+  throw new TimeoutError(`Timeout: waited ${timeout}ms for selector "${selector}"`);
 }
 
-
-/**
- * Determines the subject tag for a question based on a set of hierarchical rules.
- * @param {string} sectionName - The name of the section from the webpage.
- * @param {number} questionNumber - The serial number (SL) of the question within its section.
- * @returns {string|null} The determined tag (e.g., 'MATH', 'GI') or null if no rule matches.
- */
-function getTagForQuestion(sectionName, questionNumber) {
-  if (!sectionName || typeof questionNumber !== 'number') {
-    return null;
+// --------------------- Human-like Scroll & Mouse ---------------------
+async function smoothScroll(Runtime, distance = 150, steps = 5) {
+  const stepSize = distance / steps;
+  for (let i = 0; i < steps; i++) {
+    const direction = Math.random() > 0.5 ? 1 : -1;
+    await Runtime.evaluate({ expression: `window.scrollBy(0, ${stepSize * direction})` });
+    // FASTER: Reduced scroll delay
+    await randomDelay(20, 50);
   }
-  
-  const trimmedSection = sectionName.trim();
+}
 
-  // 1. Special Override Rules (Highest Priority)
-  if (trimmedSection === "Section I") {
+async function humanMoveMouse(Input, startX, startY, endX, endY, steps = 8) {
+  for (let i = 0; i <= steps; i++) {
+    const x = startX + ((endX - startX) * i) / steps + Math.random() * 2;
+    const y = startY + ((endY - startY) * i) / steps + Math.random() * 2;
+    await Input.dispatchMouseEvent({ type: 'mouseMoved', x, y });
+    // FASTER: Reduced mouse move delay
+    await randomDelay(5, 15);
+  }
+}
+
+async function humanClick(Runtime, Input, selector) {
+  const { result } = await Runtime.evaluate({
+    expression: `(() => {
+      const el = document.querySelector('${selector}');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })();`,
+    returnByValue: true
+  });
+
+  if (!result.value) throw new Error(`Selector not found: ${selector}`);
+  const { x, y } = result.value;
+
+  await humanMoveMouse(Input, x + Math.random()*20 - 10, y + Math.random()*20 - 10, x, y);
+  // FASTER: Reduced pre-click delay
+  await randomDelay(50, 150);
+
+  await Input.dispatchMouseEvent({ type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+  await randomDelay(40, 80);
+  await Input.dispatchMouseEvent({ type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+  // FASTER: Reduced post-click delay
+  await randomDelay(100, 200);
+}
+
+// --------------------- Tagging ---------------------
+function getTagForQuestion(sectionName, questionNumber) {
+  if (!sectionName || typeof questionNumber !== 'number') return null;
+  const s = sectionName.trim();
+  if (s === "Section I") {
     if (questionNumber >= 1 && questionNumber <= 30) return 'MATH';
     if (questionNumber >= 31 && questionNumber <= 60) return 'GI';
   }
-  if (trimmedSection === "Section II") {
+  if (s === "Section II") {
     if (questionNumber >= 1 && questionNumber <= 45) return 'ENG';
     if (questionNumber >= 46 && questionNumber <= 70) return 'GK';
   }
-
-  // 2. Simplified General Fallback Rules
-  const lowerCaseSection = trimmedSection.toLowerCase();
-  if (lowerCaseSection.includes("quantitative") || lowerCaseSection.includes("quants")) return 'MATH';
-  if (lowerCaseSection.includes("intelligence") || lowerCaseSection.includes("reasoning")) return 'GI';
-  if (lowerCaseSection.includes("english")) return 'ENG';
-  if (lowerCaseSection.includes("awareness") || lowerCaseSection.includes("knowledge")) return 'GK';
-  if (lowerCaseSection.includes("computer")) return 'COMPUTER';
-  if (lowerCaseSection.includes("bengali")) return 'BENGALI';
-
-  // 3. No Match Found
+  const lc = s.toLowerCase();
+  if (lc.includes("quantitative") || lc.includes("quants")) return 'MATH';
+  if (lc.includes("intelligence") || lc.includes("reasoning")) return 'GI';
+  if (lc.includes("english")) return 'ENG';
+  if (lc.includes("awareness") || lc.includes("knowledge")) return 'GK';
+  if (lc.includes("computer")) return 'COMPUTER';
+  if (lc.includes("bengali")) return 'BENGALI';
   return null;
 }
 
-/**
- * Parses, SANITIZES, and extracts details for a single question.
- * @param {string} html - The HTML string of the page to be scraped.
- * @param {number} fallbackCounter - A counter to use if the question number cannot be read from the page.
- * @param {object} log - The logger instance.
- * @param {number} noteId - The unique ID for the note.
- * @param {number} serialNumber - The sequential serial number (SL) for the question.
- * @returns {Promise<object|null>} A promise that resolves to the question data object.
- */
+// --------------------- Scrape Single Question ---------------------
 async function scrapeSingleQuestionPage(html, fallbackCounter, log, noteId, serialNumber) {
   try {
     const $ = cheerio.load(html);
     const s = selectors.parser;
     const $container = $(s.activeQuestionContainer);
+    if ($container.length === 0) { log.warn('No active question container.'); return null; }
 
-    if ($container.length === 0) {
-      log.warn('Active question container not found. Skipping.');
-      return null;
-    }
-
-    const $questionNumberElement = $container.find(s.questionNumber);
-    const $clonedElement = $questionNumberElement.clone();
-    $clonedElement.find('span.hidden-xs').remove();
-    const slText = $clonedElement.text().trim();
-    const slMatch = slText.match(/\d+/);
-    // This number is scraped from the page and used specifically for tag detection.
-    const questionNumberForTagging = slMatch ? parseInt(slMatch[0], 10) : fallbackCounter;
-    
+    const $numEl = $container.find(s.questionNumber).clone();
+    $numEl.find('span.hidden-xs').remove();
+    const slText = $numEl.text().trim();
+    const qNum = slText.match(/\d+/) ? parseInt(slText.match(/\d+/)[0], 10) : fallbackCounter;
     const sectionName = $(s.sectionName).text().trim();
-    // Use the scraped question number for tag detection logic.
-    const tag = getTagForQuestion(sectionName, questionNumberForTagging);
-    
+    const tag = getTagForQuestion(sectionName, qNum);
+
     const rawComprehension = $container.find(s.comprehension).html()?.trim();
     const rawQuestionBody = $container.find(s.questionBody).html()?.trim();
     const rawSolution = $container.find(s.solution).html()?.trim();
-    
+
     const rawOptions = [];
-    const $options = $container.find(s.optionContainer);
-    $options.each((_, element) => {
-      rawOptions.push($(element).find(s.optionText).html()?.trim());
+    $container.find(s.optionContainer).each((_, el) => {
+      rawOptions.push($(el).find(s.optionText).html()?.trim());
     });
 
     const sanitizedComprehension = await transformAndSanitizeHtml(rawComprehension);
     const sanitizedQuestionBody = await transformAndSanitizeHtml(rawQuestionBody);
     const sanitizedSolution = await transformAndSanitizeHtml(rawSolution);
-    const sanitizedOptions = await Promise.all(
-      rawOptions.map(opt => transformAndSanitizeHtml(opt))
-    );
+    const sanitizedOptions = await Promise.all(rawOptions.map(opt => transformAndSanitizeHtml(opt)));
 
     let finalQuestionHtml = sanitizedQuestionBody;
-    if (sanitizedComprehension) {
-      // Use a formatted header instead of a horizontal rule (<hr>).
-      finalQuestionHtml = `${sanitizedComprehension}<br><br><strong><u>Question</u></strong><br>${sanitizedQuestionBody}`;
-    }
+    if (sanitizedComprehension) finalQuestionHtml = `${sanitizedComprehension}<br><br><strong><u>Question</u></strong><br>${sanitizedQuestionBody}`;
 
-    const $correctOption = $options.filter(`.${s.correctOptionClass}`);
-    const correctAnswerIndex = $correctOption.index();
+    const correctAnswerIndex = $container.find(s.optionContainer).filter(`.${s.correctOptionClass}`).index();
+    if (!finalQuestionHtml || sanitizedOptions.length === 0) { log.warn(`Invalid data for question #${qNum}`); return null; }
 
-    if (!finalQuestionHtml || sanitizedOptions.length === 0) {
-      log.warn(`Could not find valid data for question on page #${questionNumberForTagging} after sanitization.`);
-      return null;
-    }
-
-    const finalQuestionData = {
-      noteId,
-      SL: serialNumber, // Use the passed-in sequential counter for the SL field.
-      Question: finalQuestionHtml,
-      OP1: sanitizedOptions[0] || null,
-      OP2: sanitizedOptions[1] || null,
-      OP3: sanitizedOptions[2] || null,
-      OP4: sanitizedOptions[3] || null,
+    return {
+      noteId, SL: serialNumber, Question: finalQuestionHtml,
+      OP1: sanitizedOptions[0] || null, OP2: sanitizedOptions[1] || null,
+      OP3: sanitizedOptions[2] || null, OP4: sanitizedOptions[3] || null,
       Answer: correctAnswerIndex !== -1 ? correctAnswerIndex + 1 : 0,
-      Solution: sanitizedSolution,
-      Tags: tag ? [tag] : []
+      Solution: sanitizedSolution, Tags: tag ? [tag] : []
     };
-    
-    return finalQuestionData;
-
   } catch (e) {
-    log.error('Error during Cheerio parsing or sanitization.');
-    log.error(e);
-    return null;
+    log.error('Error parsing question.'); log.error(e); return null;
   }
 }
 
-/**
- * Main function to orchestrate the scraping process.
- */
+// --------------------- Main Function ---------------------
 async function main() {
   program
-    .option('-l, --link <url>', 'The full URL to the analysis page')
-    .option('-c, --count <number>', 'The number of questions to scrape (optional)')
-    .option('-t, --tag <tag>', 'A common tag to add to all scraped questions')
-    .option('-s, --skip <number>', 'Skip the first N questions before scraping', '0')
+    .option('-l, --link <url>', 'Full URL to analysis page')
+    .option('-c, --count <number>', 'Number of questions to scrape')
+    .option('-t, --tag <tag>', 'Common tag for all questions')
+    .option('-s, --skip <number>', 'Skip first N questions', '0')
     .parse(process.argv);
 
   const options = program.opts();
   if (!options.link) { consoleLog.error('The --link argument is required.'); process.exit(1); }
-  
-  const urlToOpen = options.link;
+
+  const url = options.link;
   const scrapeLimit = options.count ? parseInt(options.count, 10) : Infinity;
   const commonTag = options.tag;
-  const questionsToSkip = parseInt(options.skip, 10);
+  const skipCount = parseInt(options.skip, 10);
 
-  consoleLog.action(`Attempting to open URL: ${urlToOpen}`);
-  if (scrapeLimit !== Infinity) { consoleLog.info(`Scraping will be limited to ${scrapeLimit} question(s).`); }
+  consoleLog.action(`Opening URL: ${url}`);
+  if (scrapeLimit !== Infinity) consoleLog.info(`Scraping limited to ${scrapeLimit} questions.`);
 
-  let sanitizedExamName = 'scraped_quiz_data';
-  let browserClient;
-  let tabClient;
-  let logger;
+  let browserClient, tabClient, logger, sanitizedExamName;
 
   try {
     browserClient = await CDP();
-    consoleLog.success('Connected to the browser!'); 
+    consoleLog.success('Connected to browser.');
     const { Target } = browserClient;
     const { targetId } = await Target.createTarget({ url: 'about:blank' });
     tabClient = await CDP({ target: targetId });
     consoleLog.success(`Connected to new tab: ${targetId}`);
 
-    const { Page, Runtime } = tabClient;
+    const { Page, Runtime, Input } = tabClient;
     await Promise.all([Page.enable(), Runtime.enable()]);
 
-    const maxRetries = 3;
-    for (let i = 1; i <= maxRetries; i++) {
+    for (let i = 1; i <= 3; i++) {
       try {
-        consoleLog.action(`Attempting to navigate to URL (Attempt ${i}/${maxRetries})...`);
-        await Page.navigate({ url: urlToOpen, timeout: 60000 });
+        consoleLog.action(`Navigating to URL (Attempt ${i}/3)...`);
+        await Page.navigate({ url, timeout: 60000 });
         await Page.loadEventFired();
-        consoleLog.success('Analysis page loaded successfully!');
+        consoleLog.success('Page loaded.');
         break;
       } catch (err) {
         consoleLog.warn(`Attempt ${i} failed: ${err.message}`);
-        if (i < maxRetries) {
-          consoleLog.info('Retrying in 5 seconds...');
-          await delay(5000);
-        } else {
-          consoleLog.error('All navigation attempts failed. Exiting.');
-          throw err;
-        }
+        if (i < 3) await randomDelay(4000, 6000);
+        else throw err;
       }
     }
 
     try {
-        consoleLog.action('Waiting for analysis page content to render (10s timeout)...');
-        // Wait up to 10s for the title
-        await waitForSelector(Runtime, selectors.parser.examName, 10000);
-        consoleLog.success('Exam name element found.');
-        // Wait up to 10s for the button
-        await waitForSelector(Runtime, selectors.scraper.solutionsButton, 10000);
-        consoleLog.success('Solutions button found.');
+      consoleLog.action('Waiting for page content...');
+      await waitForSelector(Runtime, selectors.parser.examName, 10000);
+      await waitForSelector(Runtime, selectors.scraper.solutionsButton, 10000);
     } catch (err) {
-        if (err instanceof TimeoutError) {
-            consoleLog.error('--- CRITICAL SETUP FAILED ---');
-            consoleLog.error(err.message); // Log the specific timeout error
-            consoleLog.error('Could not find essential page elements (Exam Name or Solutions button).');
-            consoleLog.error('This may be due to a wrong link, a page layout change, or a very slow network connection.');
-            consoleLog.error('Aborting scrape for this link.');
-            process.exit(1); // Exit with an error code
-        }
-        // For any other unexpected error, re-throw it to be caught by the main handler
-        throw err;
+      consoleLog.error('Critical setup failed. Elements not found.');
+      process.exit(1);
     }
-    
-    const analysisPageHtml = (await Runtime.evaluate({ expression: 'document.documentElement.outerHTML' })).result.value;
-    const $ = cheerio.load(analysisPageHtml);
-    const examTitle = $(selectors.parser.examName).text().trim();
 
-    if (examTitle) {
-      sanitizedExamName = examTitle.replace(/: /g, ' - ').replace(/[<>:"/\\|?*]/g, '');
-    }
+    const html = (await Runtime.evaluate({ expression: 'document.documentElement.outerHTML' })).result.value;
+    const $ = cheerio.load(html);
+    const examTitle = $(selectors.parser.examName).text().trim();
+    if (!examTitle) { consoleLog.error('Exam title not found.'); process.exit(1); }
+    sanitizedExamName = examTitle.replace(/: /g, ' - ').replace(/[<>:"/\\|?*]/g, '');
 
     const logFilePath = path.join('logs', 'scraped', `${sanitizedExamName}.log`);
     logger = createLogger(logFilePath);
-    logger.info(`Logger initialized. Saving logs to: ${logFilePath}`);
-    
-    if (commonTag) { logger.info(`A common tag will be added to all questions: "${commonTag}"`); }
-    if (examTitle) { logger.info(`Exam Name: ${examTitle}`); } 
-    else { logger.warn('Could not find the exam title on the analysis page.'); }
+    logger.info(`Exam: ${examTitle}`);
+    if (commonTag) logger.info(`Common tag: ${commonTag}`);
 
-    logger.action('Clicking "Solutions" button to enter quiz interface...');
-    await Runtime.evaluate({ expression: `document.querySelector('${selectors.scraper.solutionsButton}').click();` });
+    logger.action('Clicking Solutions button...');
+    await humanClick(Runtime, Input, selectors.scraper.solutionsButton);
     await Page.loadEventFired();
     logger.success('Quiz interface loaded.');
 
-    if (questionsToSkip > 0) {
-      logger.action(`--- Skipping the first ${questionsToSkip} questions as requested ---`);
-      for (let i = 0; i < questionsToSkip; i++) {
-        const nextButtonExists = await Runtime.evaluate({ expression: `!!document.querySelector('${selectors.scraper.nextButton}')` });
-        if (!nextButtonExists.result.value) {
-          logger.warn(`Could not find the 'Next' button while skipping. Reached the end after skipping ${i} questions.`);
-          break;
-        }
-        logger.info(`Skipping question ${i + 1}/${questionsToSkip}...`);
-        await Runtime.evaluate({ expression: `document.querySelector('${selectors.scraper.nextButton}').click();` });
-        await delay(1000);
+    if (skipCount > 0) {
+      logger.action(`Skipping first ${skipCount} questions...`);
+      for (let i = 0; i < skipCount; i++) {
+        const exists = await Runtime.evaluate({ expression: `!!document.querySelector('${selectors.scraper.nextButton}')` });
+        if (!exists.result.value) break;
+        await humanClick(Runtime, Input, selectors.scraper.nextButton);
+        await randomDelay(500, 800);
       }
-      logger.success(`Finished skipping ${questionsToSkip} questions.`);
+      logger.success('Skipped questions.');
     }
 
-    const allQuestionsData = [];
-    let questionCounter = questionsToSkip + 1; // Tracks the question number on the page for logging/fallback
-    let noteIdCounter = 1000 + questionsToSkip;
-    let serialNumberCounter = 1; // New counter for the final 'SL' field, starts at 1
+    // ---------------- Scraping Loop ----------------
+    const allData = [];
+    let qCounter = skipCount + 1;
+    let noteId = 1000 + skipCount;
+    let serial = 1;
 
-    // Main scraping loop.
     while (true) {
-      logger.action(`--- Processing Question on page #${questionCounter} ---`);
-      await delay(1500);
+      logger.action(`Processing question #${qCounter}`);
+      await smoothScroll(Runtime);
+      // FASTER: Significantly reduced main "thinking" pause
+      await randomDelay(800, 1200);
 
-      await Runtime.evaluate({ expression: `document.querySelector('${selectors.scraper.viewSolutionButton}').click()` });
-      await delay(1000);
+      await humanClick(Runtime, Input, selectors.scraper.viewSolutionButton);
+      // FASTER: Reduced wait for solution to appear
+      await randomDelay(700, 1000);
 
       const { result } = await Runtime.evaluate({ expression: 'document.documentElement.outerHTML' });
-      const currentQuestionData = await scrapeSingleQuestionPage(result.value, questionCounter, logger, noteIdCounter, serialNumberCounter);
-      
-      if (currentQuestionData) {
-        if (commonTag) { currentQuestionData.Tags.push(commonTag); }
-        allQuestionsData.push(currentQuestionData);
-        // On success, increment the SL counter for the next question.
-        serialNumberCounter++;
-        logger.success(`Scraped data for Question SL #${currentQuestionData.SL} (Note ID: ${currentQuestionData.noteId})`);
-      } else {
-        logger.warn(`Could not parse data for question on page #${questionCounter}.`);
-      }
+      const qData = await scrapeSingleQuestionPage(result.value, qCounter, logger, noteId, serial);
+      if (qData) {
+        if (commonTag) qData.Tags.push(commonTag);
+        allData.push(qData);
+        serial++;
+        logger.success(`Scraped Question SL #${qData.SL}`);
+      } else logger.warn(`Failed to scrape question #${qCounter}`);
 
-      if (allQuestionsData.length >= scrapeLimit) {
-        logger.info(`Reached scrape limit of ${scrapeLimit} question(s). Ending loop.`);
-        break;
-      }
+      if (allData.length >= scrapeLimit) { logger.info('Reached scrape limit.'); break; }
 
-      const nextButtonExists = await Runtime.evaluate({ expression: `!!document.querySelector('${selectors.scraper.nextButton}')` });
-      if (!nextButtonExists.result.value) {
-        logger.info('Next button not found. Assuming this is the last question. Ending scrape loop.');
-        break;
-      }
-      logger.action('Clicking "Next" question...');
-      await Runtime.evaluate({ expression: `document.querySelector('${selectors.scraper.nextButton}').click();` });
+      const nextExists = await Runtime.evaluate({ expression: `!!document.querySelector('${selectors.scraper.nextButton}')` });
+      if (!nextExists.result.value) break;
+
+      await humanClick(Runtime, Input, selectors.scraper.nextButton);
+      qCounter++;
+      noteId++;
       
-      questionCounter++;
-      noteIdCounter++;
-      
-      await delay(500);
-      const reachedEndText = await Runtime.evaluate({
-        expression: `document.body.innerText.includes('You have reached the last question. Do you want to navigate to first question')`
-      });
-      if (reachedEndText.result.value) {
-        logger.info('Detected the "You have reached the last question" message. Ending scrape loop.');
-        break;
-      }
+      // FASTER: Removed the long periodic break
+      // FASTER: Shortened the post-"Next" delay
+      await randomDelay(300, 600);
+
+      const reachedEnd = await Runtime.evaluate({ expression: `document.body.innerText.includes('You have reached the last question.')` });
+      if (reachedEnd.result.value) break;
     }
 
-    if (allQuestionsData.length > 0) {
-      const outputDir = path.join('output', 'scraped');
-      fs.mkdirSync(outputDir, { recursive: true });
-      
-      const fileName = `${sanitizedExamName}.json`;
-      const filePath = path.join(outputDir, fileName);
-
-      fs.writeFileSync(filePath, JSON.stringify(allQuestionsData, null, 2));
-      logger.success(`All data saved to ${filePath}! Total questions scraped: ${allQuestionsData.length}`);
-    } else {
-      logger.warn('Scraping finished, but no data was collected.');
-    }
+    if (allData.length > 0) {
+      const outDir = path.join('output', 'scraped');
+      fs.mkdirSync(outDir, { recursive: true });
+      const filePath = path.join(outDir, `${sanitizedExamName}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(allData, null, 2));
+      logger.success(`Scraping completed! Saved ${allData.length} questions to ${filePath}`);
+    } else logger.warn('No data scraped.');
 
   } catch (err) {
     const log = logger || consoleLog;
-    log.error('A critical error occurred in the main process.');
+    log.error('Critical error in main process.');
     log.error(err);
-    process.exit(1); 
+    process.exit(1);
   } finally {
     if (tabClient) await tabClient.close();
     if (browserClient) await browserClient.close();
     if (logger) logger.close();
-    consoleLog.info('All connections closed.');
+    consoleLog.info('Connections closed.');
   }
 }
 
