@@ -1,0 +1,27 @@
+{
+  "name": "testbook-automation",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "scrape": "node src/workflows/scraper/scraper.js",
+    "scrape:all": "node src/workflows/scrapper/batch_scraper.js",
+    "tag": "node -r dotenv/config src/workflows/tagging/tagger.js",
+    "tag:all": "node -r dotenv/config src/workflows/tagging/run_batch_tagger.js",
+    
+    "json-to-tsv": "node scripts/json-to-tsv.js",
+    "json-to-tsv:all": "node scripts/json-to-tsv.js --all",
+    "validate-links": "node scripts/validateLinks.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "chrome-remote-interface": "^0.33.3",
+    "commander": "^14.0.1",
+    "execa": "^9.6.0",
+    "html-minifier-terser": "^7.2.0"
+  }
+}
